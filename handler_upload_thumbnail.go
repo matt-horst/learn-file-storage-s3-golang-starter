@@ -39,7 +39,7 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		respondWithError(w, http.StatusInternalServerError, "Couldn't parse video", err)
 	}
 
-	file, _, err := r.FormFile("thumbnail")
+	file, fileHeader, err := r.FormFile("thumbnail")
 	if err !=  nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't retrieve video form file", err)
 	}
@@ -58,9 +58,14 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		respondWithError(w, http.StatusUnauthorized, "You must be video's owner", err)
 	}
 
+	mediaType := fileHeader.Header.Get("Content-Type")
+	if mediaType == "" {
+		respondWithError(w, http.StatusBadRequest, "Missing Content-Type for thumbnail", err)
+	}
+
 	thumbnail := thumbnail {
 		data: data,
-		mediaType: "video/",
+		mediaType: mediaType,
 	}
 	
 	videoThumbnails[videoID] = thumbnail
@@ -70,6 +75,7 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 
 	err = cfg.db.UpdateVideo(video)
 	if err != nil {
+		delete(videoThumbnails, videoID)
 		respondWithError(w, http.StatusInternalServerError, "Couldn't update video", err)
 	}
 
