@@ -2,8 +2,11 @@ package main
 
 import (
 	"fmt"
-	"net/http"
 	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
@@ -44,11 +47,6 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		respondWithError(w, http.StatusInternalServerError, "Couldn't retrieve video form file", err)
 	}
 
-	data, err := io.ReadAll(file)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Couldn't read data from form file", err)
-	}
-
 	video, err := cfg.db.GetVideo(videoID)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't retrieve video info from db", err)
@@ -63,19 +61,31 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		respondWithError(w, http.StatusBadRequest, "Missing Content-Type for thumbnail", err)
 	}
 
-	thumbnail := thumbnail {
-		data: data,
-		mediaType: mediaType,
-	}
-	
-	videoThumbnails[videoID] = thumbnail
+	fmt.Printf("mediaType: `%s`\n", mediaType)
 
-	thumbnailURL := fmt.Sprintf("http://localhost:%s/api/thumbnails/%s", cfg.port, videoID.String())
+	_, fileExt, ok := strings.Cut(mediaType, "/")
+	if !ok {
+		respondWithError(w, http.StatusBadRequest, "Missing file type for thumbnail", err)
+	}
+
+	fmt.Printf("ext: `%s`\n", fileExt)
+	fileName := videoID.String() + "." + fileExt
+	fmt.Printf("name: `%s`\n", fileName)
+	filePath := filepath.Join(cfg.assetsRoot, fileName)
+	fmt.Printf("path: `%s`\n", filePath)
+
+	localFile, err := os.Create(filePath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to create file", err)
+	}
+
+	io.Copy(localFile, file)
+
+	thumbnailURL := fmt.Sprintf("http://localhost:%s/assets/%s", cfg.port, fileName)
 	video.ThumbnailURL = &thumbnailURL
 
 	err = cfg.db.UpdateVideo(video)
 	if err != nil {
-		delete(videoThumbnails, videoID)
 		respondWithError(w, http.StatusInternalServerError, "Couldn't update video", err)
 	}
 
