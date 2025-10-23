@@ -119,15 +119,29 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	_, videoFileExt, ok := strings.Cut(mediaType, "/")
 	if !ok {
 		respondWithError(w, http.StatusBadRequest, "Invalid media type", err)
+		return
 	}
 	videoFileName := base64.URLEncoding.EncodeToString(buf[:]) + "." + videoFileExt
  	videoKey := path.Join(category, videoFileName)
+
+	processedVideoFilepath, err := processVideoForFastStart(tmpFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Couldn't process video", err)
+		return
+	}
+
+	processedVideo, err := os.Open(processedVideoFilepath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't find processed video", err)
+		return
+	}
+	defer processedVideo.Close()
 
 	params := &s3.PutObjectInput {
 		Bucket: &cfg.s3Bucket,
 		Key: &videoKey,
 		ContentType: &mediaType,
-		Body: tmpFile,
+		Body: processedVideo,
 	}
 	cfg.s3Client.PutObject(r.Context(), params)
 
@@ -181,4 +195,15 @@ func getVideoAspectRatio(filepath string) (string, error) {
 	}
 
 	return "other", nil
+}
+
+func processVideoForFastStart(filepath string) (string, error) {
+	outputFilepath := filepath + ".processing"
+	cmd := exec.Command("ffmpeg", "-i", filepath, "-c", "copy", "-movflags", "faststart", "-f", "mp4", outputFilepath)
+	err := cmd.Run()
+	if err != nil {
+		return "", fmt.Errorf("Couldn't run ffmpeg: %v", err)
+	}
+
+	return outputFilepath, nil
 }
