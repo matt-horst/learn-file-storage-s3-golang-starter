@@ -1,13 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"mime"
 	"net/http"
 	"os"
+	"os/exec"
+	"path"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -96,11 +100,28 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	aspectRatio, err := getVideoAspectRatio(tmpFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Couldn't determine aspect ratio", err)
+		return
+	}
+
+	var category string
+	switch aspectRatio {
+	case "16:9":
+		category = "landscape"
+	case "9:16":
+		category = "portrait"
+	default:
+		category = "other"
+	}
+
 	_, videoFileExt, ok := strings.Cut(mediaType, "/")
 	if !ok {
 		respondWithError(w, http.StatusBadRequest, "Invalid media type", err)
 	}
- 	videoKey := base64.URLEncoding.EncodeToString(buf[:]) + "." + videoFileExt
+	videoFileName := base64.URLEncoding.EncodeToString(buf[:]) + "." + videoFileExt
+ 	videoKey := path.Join(category, videoFileName)
 
 	params := &s3.PutObjectInput {
 		Bucket: &cfg.s3Bucket,
@@ -119,4 +140,45 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		respondWithError(w, http.StatusInternalServerError, "Couldn't update video url", err)
 		return
 	}
+}
+
+func getVideoAspectRatio(filepath string) (string, error) {
+	args := "-v error -print_format json -show_streams " + filepath
+	cmd := exec.Command("ffprobe", strings.Split(args, " ")...)
+	buf := bytes.NewBuffer([]byte{})
+	cmd.Stdout = buf
+
+	err := cmd.Run()
+	if err != nil {
+		return "", fmt.Errorf("Couldn't run ffprobe: %v", err)
+	}
+
+	data := struct {
+		Streams []struct {
+			Width int 		`json:"width"`
+			Height int		`json:"height"`
+		} 					`json:"streams"`
+	} {}
+
+	decoder := json.NewDecoder(buf)
+	err = decoder.Decode(&data)
+	if err != nil {
+		return "", fmt.Errorf("Couldn't unmarshal json: %v", err)
+	}
+
+	if len(data.Streams) == 0 {
+		return "", fmt.Errorf("No streams found in video file: %s", filepath)
+	}
+
+	width := data.Streams[0].Width
+	height := data.Streams[1].Height
+	if width / 9 == height / 16 {
+		return "9:16", nil
+	}
+
+	if width / 16 == height / 9 {
+		return "16:9", nil
+	}
+
+	return "other", nil
 }
